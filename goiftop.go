@@ -19,12 +19,14 @@ var Stats = &Statistics{
 }
 
 var ifaceName string
+var duration int
 var filter string
 var isTransport bool
 var isShowVersion bool
 
 func init() {
 	flag.StringVar(&ifaceName, "i", "", "Interface name")
+	flag.IntVar(&duration, "d", 1, "Throughput statistics duration")
 	flag.StringVar(&filter, "f", "", "BPF filter")
 	flag.BoolVar(&isTransport, "t", false, "Show transport layer flows")
 	flag.BoolVar(&isShowVersion, "v", false, "Version")
@@ -43,7 +45,7 @@ func main() {
 
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, syscall.SIGHUP, syscall.SIGINT)
-	tick := time.Tick(time.Second * 1)
+	tickStatsDuration := time.Tick(time.Second * time.Duration(duration))
 
 	Stats.ifaces[ifaceName] = NewIface(ifaceName)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -51,16 +53,18 @@ func main() {
 
 	for {
 		select {
-		case <-tick:
-			log.Println()
-			for k, v := range Stats.ifaces[ifaceName].NetworkFlows {
-				log.Printf("%s %s %s %s %d %d\n", k, v.Type, v.Addr[0], v.Addr[1], v.TotalBytes[0], v.TotalBytes[1])
+		case <-tickStatsDuration:
+			fmt.Println()
+			for _, v := range Stats.ifaces[ifaceName].NetworkFlows {
+				printRate(v.Type, v.Addr[0], v.Addr[1], v.DeltaBytes[0], v.DeltaBytes[1])
 			}
 			if isTransport {
-				for k, v := range Stats.ifaces[ifaceName].TransportFlows {
-					log.Printf("%s %s %s:%s %s:%s %d %d\n", k, v.Protocol, v.Addr[0], v.Port[0], v.Addr[1], v.Port[1], v.TotalBytes[0], v.TotalBytes[1])
+				for _, v := range Stats.ifaces[ifaceName].TransportFlows {
+					printRate(v.Protocol, v.Addr[0]+":"+v.Port[0], v.Addr[1]+":"+v.Port[1], v.DeltaBytes[0], v.DeltaBytes[1])
 				}
 			}
+
+			Stats.ifaces[ifaceName].ResetDeltaBytes()
 		case <-signalChan:
 			cancel()
 			goto END
@@ -92,7 +96,33 @@ func listenPacket(ifaceName string, ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case p := <-ps.Packets():
-			Stats.PacketHandler(ifaceName, p)
+			go Stats.PacketHandler(ifaceName, p)
 		}
+	}
+}
+
+func printRate(flowType string, srcAddr string, dstAddr string, upDeltaBytes int64, downDeltaBytes int64) {
+	if upDeltaBytes > 0 || downDeltaBytes > 0 {
+		upRate := upDeltaBytes * 8 / int64(duration)
+		downRate := downDeltaBytes * 8 / int64(duration)
+
+		var upRateStr, downRateStr string
+		if upRate >= 1000000 {
+			upRateStr = fmt.Sprintf("%.2fMbps", float64(upRate)/float64(1000000))
+		} else if upRate >= 1000 && upRate < 1000000 {
+			upRateStr = fmt.Sprintf("%.2fKbps", float64(upRate)/float64(1000))
+		} else {
+			upRateStr = fmt.Sprintf("%dbps", upRate)
+		}
+
+		if downRate >= 1000000 {
+			downRateStr = fmt.Sprintf("%.2fMbps", float64(downRate)/float64(1000000))
+		} else if upRate >= 1000 && upRate < 1000000 {
+			downRateStr = fmt.Sprintf("%.2fKbps", float64(downRate)/float64(1000))
+		} else {
+			downRateStr = fmt.Sprintf("%dbps", downRate)
+		}
+
+		fmt.Printf("Type: %s, Src: %s, Dst: %s, Up: %s, Down: %s\n", flowType, srcAddr, dstAddr, upRateStr, downRateStr)
 	}
 }

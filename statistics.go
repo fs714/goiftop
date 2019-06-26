@@ -16,63 +16,102 @@ func NewIface(ifaceName string) (iface *Iface) {
 }
 
 type NetworkFlow struct {
-	Type       string
-	Addr       [2]string
-	TotalBytes [2]int64
+	Type             string
+	Addr             [2]string
+	TotalBytes       [2]int64
+	DeltaBytes       [2]int64
+	ZeroDeltaCounter int
 }
 
 type TransportFlow struct {
-	Protocol   string
-	Addr       [2]string
-	Port       [2]string
-	TotalBytes [2]int64
+	Protocol         string
+	Addr             [2]string
+	Port             [2]string
+	TotalBytes       [2]int64
+	DeltaBytes       [2]int64
+	ZeroDeltaCounter int
 }
 
 type Iface struct {
 	Name           string
 	NetworkFlows   map[string]*NetworkFlow
 	TransportFlows map[string]*TransportFlow
-	TotalBytes     int64
 	Lock           sync.Mutex
 }
 
 func (i *Iface) UpdateNetworkFlow(networkType string, srcAddr string, dstAddr string, length int) {
+	i.Lock.Lock()
 	var nf *NetworkFlow
 	var ok bool
 	if nf, ok = i.NetworkFlows[srcAddr+"_"+dstAddr]; ok {
 		nf.TotalBytes[0] += int64(length)
-		return
+		nf.DeltaBytes[0] += int64(length)
 	} else if nf, ok = i.NetworkFlows[dstAddr+"_"+srcAddr]; ok {
 		nf.TotalBytes[1] += int64(length)
-		return
+		nf.DeltaBytes[1] += int64(length)
 	} else {
 		nf = &NetworkFlow{
 			Type:       networkType,
 			Addr:       [2]string{srcAddr, dstAddr},
 			TotalBytes: [2]int64{int64(length), 0},
+			DeltaBytes: [2]int64{int64(length), 0},
 		}
 		i.NetworkFlows[srcAddr+"_"+dstAddr] = nf
 	}
+	i.Lock.Unlock()
 }
 
 func (i *Iface) UpdateTransportFlow(transportProtocol string, srcAddr string, dstAddr string, srcPort string, dstPort string, length int) {
+	i.Lock.Lock()
 	var tf *TransportFlow
 	var ok bool
 	if tf, ok = i.TransportFlows[srcAddr+":"+srcPort+"_"+dstAddr+":"+dstPort]; ok {
 		tf.TotalBytes[0] += int64(length)
-		return
+		tf.DeltaBytes[0] += int64(length)
 	} else if tf, ok = i.TransportFlows[dstAddr+":"+dstPort+"_"+srcAddr+":"+srcPort]; ok {
 		tf.TotalBytes[1] += int64(length)
-		return
+		tf.DeltaBytes[1] += int64(length)
 	} else {
 		tf = &TransportFlow{
 			Protocol:   transportProtocol,
 			Addr:       [2]string{srcAddr, dstAddr},
 			Port:       [2]string{srcPort, dstPort},
 			TotalBytes: [2]int64{int64(length), 0},
+			DeltaBytes: [2]int64{int64(length), 0},
 		}
 		i.TransportFlows[srcAddr+":"+srcPort+"_"+dstAddr+":"+dstPort] = tf
 	}
+	i.Lock.Unlock()
+}
+
+func (i *Iface) ResetDeltaBytes() {
+	i.Lock.Lock()
+	for k, v := range i.NetworkFlows {
+		if v.DeltaBytes[0] == 0 && v.DeltaBytes[1] == 0 {
+			v.ZeroDeltaCounter += 1
+			if v.ZeroDeltaCounter*duration > 10 {
+				delete(i.NetworkFlows, k)
+			}
+		} else {
+			v.DeltaBytes[0] = 0
+			v.DeltaBytes[1] = 0
+		}
+	}
+
+	if isTransport {
+		for k, v := range i.TransportFlows {
+			if v.DeltaBytes[0] == 0 && v.DeltaBytes[1] == 0 {
+				v.ZeroDeltaCounter += 1
+				if v.ZeroDeltaCounter*duration > 10 {
+					delete(i.TransportFlows, k)
+				}
+			} else {
+				v.DeltaBytes[0] = 0
+				v.DeltaBytes[1] = 0
+			}
+		}
+	}
+	i.Lock.Unlock()
 }
 
 type Statistics struct {
@@ -101,7 +140,6 @@ func (s *Statistics) PacketHandler(ifaceName string, pkg gopacket.Packet) {
 	var srcPort, dstPort string
 	var networkLen, transportLen int
 
-	iface.TotalBytes += int64(pkg.Metadata().CaptureInfo.Length)
 	for _, ly := range pkg.Layers() {
 		switch ly.LayerType() {
 		case layers.LayerTypeIPv4:
@@ -133,10 +171,8 @@ func (s *Statistics) PacketHandler(ifaceName string, pkg gopacket.Packet) {
 		return
 	}
 
-	iface.Lock.Lock()
 	iface.UpdateNetworkFlow(networkType, srcAddr, dstAddr, networkLen)
 	if isTransport {
 		iface.UpdateTransportFlow(transportProtocol, srcAddr, dstAddr, srcPort, dstPort, transportLen)
 	}
-	iface.Lock.Unlock()
 }
