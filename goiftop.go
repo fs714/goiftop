@@ -88,6 +88,7 @@ func main() {
 			updateL3FlowSnapshots()
 			printFlowSnapshots(L3FlowSnapshots)
 			if enableLayer4 {
+				fmt.Println()
 				updateL4FlowSnapshots()
 				printFlowSnapshots(L4FlowSnapshots)
 			}
@@ -171,24 +172,28 @@ func updateL4FlowSnapshots() {
 }
 
 func printFlowSnapshots(flowSnapshots []*FlowSnapshot) {
+	if len(flowSnapshots) > 0 {
+		fmt.Printf("%-8s %-32s %-32s %-16s %-16s\n", "Type", "Src", "Dst", "Up", "Down")
+	}
+
 	for _, f := range flowSnapshots {
 		var upRateStr, downRateStr string
 		if f.UpStreamRate >= 1000000 {
-			upRateStr = fmt.Sprintf("%.2fMbps", float64(f.UpStreamRate)/float64(1000000))
+			upRateStr = fmt.Sprintf("%.2f Mbps", float64(f.UpStreamRate)/float64(1000000))
 		} else if f.UpStreamRate >= 1000 && f.UpStreamRate < 1000000 {
-			upRateStr = fmt.Sprintf("%.2fKbps", float64(f.UpStreamRate)/float64(1000))
+			upRateStr = fmt.Sprintf("%.2f Kbps", float64(f.UpStreamRate)/float64(1000))
 		} else {
-			upRateStr = fmt.Sprintf("%dbps", f.UpStreamRate)
+			upRateStr = fmt.Sprintf("%d bps", f.UpStreamRate)
 		}
 
 		if f.DownStreamRate >= 1000000 {
-			downRateStr = fmt.Sprintf("%.2fMbps", float64(f.DownStreamRate)/float64(1000000))
+			downRateStr = fmt.Sprintf("%.2f Mbps", float64(f.DownStreamRate)/float64(1000000))
 		} else if f.DownStreamRate >= 1000 && f.DownStreamRate < 1000000 {
-			downRateStr = fmt.Sprintf("%.2fKbps", float64(f.DownStreamRate)/float64(1000))
+			downRateStr = fmt.Sprintf("%.2f Kbps", float64(f.DownStreamRate)/float64(1000))
 		} else {
-			downRateStr = fmt.Sprintf("%dbps", f.DownStreamRate)
+			downRateStr = fmt.Sprintf("%d bps", f.DownStreamRate)
 		}
 
-		fmt.Printf("Type: %s, Src: %s, Dst: %s, Up: %s, Down: %s\n", f.Type, f.SourceAddress, f.DestinationAddress, upRateStr, downRateStr)
+		fmt.Printf("%-8s %-32s %-32s %-16s %-16s\n", f.Type, f.SourceAddress, f.DestinationAddress, upRateStr, downRateStr)
 	}
 }
