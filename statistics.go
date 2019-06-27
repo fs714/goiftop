@@ -7,15 +7,7 @@ import (
 	"github.com/google/gopacket/layers"
 )
 
-func NewIface(ifaceName string) (iface *Iface) {
-	return &Iface{
-		Name:           ifaceName,
-		NetworkFlows:   make(map[string]*NetworkFlow),
-		TransportFlows: make(map[string]*TransportFlow),
-	}
-}
-
-type NetworkFlow struct {
+type L3Flow struct {
 	Type             string
 	Addr             [2]string
 	TotalBytes       [2]int64
@@ -23,7 +15,7 @@ type NetworkFlow struct {
 	ZeroDeltaCounter int
 }
 
-type TransportFlow struct {
+type L4Flow struct {
 	Protocol         string
 	Addr             [2]string
 	Port             [2]string
@@ -32,65 +24,73 @@ type TransportFlow struct {
 	ZeroDeltaCounter int
 }
 
-type Iface struct {
-	Name           string
-	NetworkFlows   map[string]*NetworkFlow
-	TransportFlows map[string]*TransportFlow
-	Lock           sync.Mutex
+func NewIface(ifaceName string) (iface *Iface) {
+	return &Iface{
+		Name:    ifaceName,
+		L3Flows: make(map[string]*L3Flow),
+		L4Flows: make(map[string]*L4Flow),
+	}
 }
 
-func (i *Iface) UpdateNetworkFlow(networkType string, srcAddr string, dstAddr string, length int) {
+type Iface struct {
+	Name    string
+	L3Flows map[string]*L3Flow
+	L4Flows map[string]*L4Flow
+	Lock    sync.Mutex
+}
+
+func (i *Iface) UpdateL3Flow(l3Type string, srcAddr string, dstAddr string, length int) {
 	i.Lock.Lock()
-	var nf *NetworkFlow
+	var l3f *L3Flow
 	var ok bool
-	if nf, ok = i.NetworkFlows[srcAddr+"_"+dstAddr]; ok {
-		nf.TotalBytes[0] += int64(length)
-		nf.DeltaBytes[0] += int64(length)
-	} else if nf, ok = i.NetworkFlows[dstAddr+"_"+srcAddr]; ok {
-		nf.TotalBytes[1] += int64(length)
-		nf.DeltaBytes[1] += int64(length)
+	if l3f, ok = i.L3Flows[srcAddr+"_"+dstAddr]; ok {
+		l3f.TotalBytes[0] += int64(length)
+		l3f.DeltaBytes[0] += int64(length)
+	} else if l3f, ok = i.L3Flows[dstAddr+"_"+srcAddr]; ok {
+		l3f.TotalBytes[1] += int64(length)
+		l3f.DeltaBytes[1] += int64(length)
 	} else {
-		nf = &NetworkFlow{
-			Type:       networkType,
+		l3f = &L3Flow{
+			Type:       l3Type,
 			Addr:       [2]string{srcAddr, dstAddr},
 			TotalBytes: [2]int64{int64(length), 0},
 			DeltaBytes: [2]int64{int64(length), 0},
 		}
-		i.NetworkFlows[srcAddr+"_"+dstAddr] = nf
+		i.L3Flows[srcAddr+"_"+dstAddr] = l3f
 	}
 	i.Lock.Unlock()
 }
 
-func (i *Iface) UpdateTransportFlow(transportProtocol string, srcAddr string, dstAddr string, srcPort string, dstPort string, length int) {
+func (i *Iface) UpdateL4Flow(l4Protocol string, srcAddr string, dstAddr string, srcPort string, dstPort string, length int) {
 	i.Lock.Lock()
-	var tf *TransportFlow
+	var l4f *L4Flow
 	var ok bool
-	if tf, ok = i.TransportFlows[srcAddr+":"+srcPort+"_"+dstAddr+":"+dstPort]; ok {
-		tf.TotalBytes[0] += int64(length)
-		tf.DeltaBytes[0] += int64(length)
-	} else if tf, ok = i.TransportFlows[dstAddr+":"+dstPort+"_"+srcAddr+":"+srcPort]; ok {
-		tf.TotalBytes[1] += int64(length)
-		tf.DeltaBytes[1] += int64(length)
+	if l4f, ok = i.L4Flows[srcAddr+":"+srcPort+"_"+dstAddr+":"+dstPort]; ok {
+		l4f.TotalBytes[0] += int64(length)
+		l4f.DeltaBytes[0] += int64(length)
+	} else if l4f, ok = i.L4Flows[dstAddr+":"+dstPort+"_"+srcAddr+":"+srcPort]; ok {
+		l4f.TotalBytes[1] += int64(length)
+		l4f.DeltaBytes[1] += int64(length)
 	} else {
-		tf = &TransportFlow{
-			Protocol:   transportProtocol,
+		l4f = &L4Flow{
+			Protocol:   l4Protocol,
 			Addr:       [2]string{srcAddr, dstAddr},
 			Port:       [2]string{srcPort, dstPort},
 			TotalBytes: [2]int64{int64(length), 0},
 			DeltaBytes: [2]int64{int64(length), 0},
 		}
-		i.TransportFlows[srcAddr+":"+srcPort+"_"+dstAddr+":"+dstPort] = tf
+		i.L4Flows[srcAddr+":"+srcPort+"_"+dstAddr+":"+dstPort] = l4f
 	}
 	i.Lock.Unlock()
 }
 
 func (i *Iface) ResetDeltaBytes() {
 	i.Lock.Lock()
-	for k, v := range i.NetworkFlows {
+	for k, v := range i.L3Flows {
 		if v.DeltaBytes[0] == 0 && v.DeltaBytes[1] == 0 {
 			v.ZeroDeltaCounter += 1
 			if v.ZeroDeltaCounter*duration > 10 {
-				delete(i.NetworkFlows, k)
+				delete(i.L3Flows, k)
 			}
 		} else {
 			v.DeltaBytes[0] = 0
@@ -98,12 +98,12 @@ func (i *Iface) ResetDeltaBytes() {
 		}
 	}
 
-	if isTransport {
-		for k, v := range i.TransportFlows {
+	if enableLayer4 {
+		for k, v := range i.L4Flows {
 			if v.DeltaBytes[0] == 0 && v.DeltaBytes[1] == 0 {
 				v.ZeroDeltaCounter += 1
 				if v.ZeroDeltaCounter*duration > 10 {
-					delete(i.TransportFlows, k)
+					delete(i.L4Flows, k)
 				}
 			} else {
 				v.DeltaBytes[0] = 0
@@ -123,9 +123,9 @@ func (s *Statistics) GetIface(ifaceName string) (iface *Iface) {
 	iface, ok = s.ifaces[ifaceName]
 	if !ok {
 		iface = &Iface{
-			Name:           ifaceName,
-			NetworkFlows:   make(map[string]*NetworkFlow),
-			TransportFlows: make(map[string]*TransportFlow),
+			Name:    ifaceName,
+			L3Flows: make(map[string]*L3Flow),
+			L4Flows: make(map[string]*L4Flow),
 		}
 		s.ifaces[ifaceName] = iface
 	}
@@ -135,44 +135,44 @@ func (s *Statistics) GetIface(ifaceName string) (iface *Iface) {
 
 func (s *Statistics) PacketHandler(ifaceName string, pkg gopacket.Packet) {
 	iface := s.GetIface(ifaceName)
-	var networkType, transportProtocol string
+	var l3Type, l4Protocol string
 	var srcAddr, dstAddr string
 	var srcPort, dstPort string
-	var networkLen, transportLen int
+	var l3Len, l4Len int
 
 	for _, ly := range pkg.Layers() {
 		switch ly.LayerType() {
 		case layers.LayerTypeIPv4:
 			l := ly.(*layers.IPv4)
-			networkType = "ipv4"
+			l3Type = "ipv4"
 			srcAddr = l.SrcIP.String()
 			dstAddr = l.DstIP.String()
-			networkLen = len(l.LayerPayload())
+			l3Len = len(l.LayerPayload())
 		case layers.LayerTypeTCP:
 			l := ly.(*layers.TCP)
-			transportProtocol = "tcp"
+			l4Protocol = "tcp"
 			srcPort = l.SrcPort.String()
 			dstPort = l.DstPort.String()
-			transportLen = len(l.LayerPayload())
+			l4Len = len(l.LayerPayload())
 		case layers.LayerTypeUDP:
 			l := ly.(*layers.UDP)
-			transportProtocol = "udp"
+			l4Protocol = "udp"
 			srcPort = l.SrcPort.String()
 			dstPort = l.DstPort.String()
-			transportLen = len(l.LayerPayload())
+			l4Len = len(l.LayerPayload())
 		case layers.LayerTypeICMPv4:
 			l := ly.(*layers.ICMPv4)
-			transportProtocol = "icmp"
-			transportLen = len(l.LayerPayload())
+			l4Protocol = "icmp"
+			l4Len = len(l.LayerPayload())
 		}
 	}
 
-	if networkType == "" || transportProtocol == "" {
+	if l3Type == "" || l4Protocol == "" {
 		return
 	}
 
-	iface.UpdateNetworkFlow(networkType, srcAddr, dstAddr, networkLen)
-	if isTransport {
-		iface.UpdateTransportFlow(transportProtocol, srcAddr, dstAddr, srcPort, dstPort, transportLen)
+	iface.UpdateL3Flow(l3Type, srcAddr, dstAddr, l3Len)
+	if enableLayer4 {
+		iface.UpdateL4Flow(l4Protocol, srcAddr, dstAddr, srcPort, dstPort, l4Len)
 	}
 }
