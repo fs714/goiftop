@@ -7,6 +7,8 @@ import (
 	"github.com/google/gopacket/layers"
 )
 
+const FlowAgingTime = 10
+
 type L3Flow struct {
 	Type             string
 	Addr             [2]string
@@ -89,7 +91,7 @@ func (i *Iface) ResetDeltaBytes() {
 	for k, v := range i.L3Flows {
 		if v.DeltaBytes[0] == 0 && v.DeltaBytes[1] == 0 {
 			v.ZeroDeltaCounter += 1
-			if v.ZeroDeltaCounter*duration > 10 {
+			if v.ZeroDeltaCounter*duration > FlowAgingTime {
 				delete(i.L3Flows, k)
 			}
 		} else {
@@ -102,7 +104,7 @@ func (i *Iface) ResetDeltaBytes() {
 		for k, v := range i.L4Flows {
 			if v.DeltaBytes[0] == 0 && v.DeltaBytes[1] == 0 {
 				v.ZeroDeltaCounter += 1
-				if v.ZeroDeltaCounter*duration > 10 {
+				if v.ZeroDeltaCounter*duration > FlowAgingTime {
 					delete(i.L4Flows, k)
 				}
 			} else {
