@@ -43,10 +43,10 @@ func (i *Iface) UpdateL3Flow(l3Type string, srcAddr string, dstAddr string, leng
 	i.Lock.Lock()
 	var l3f *L3Flow
 	var ok bool
-	if l3f, ok = i.L3Flows[srcAddr+"_"+dstAddr]; ok {
+	if l3f, ok = i.L3Flows[l3Type+"_"+srcAddr+"_"+dstAddr]; ok {
 		l3f.TotalBytes[0] += int64(length)
 		l3f.DeltaBytes[0] += int64(length)
-	} else if l3f, ok = i.L3Flows[dstAddr+"_"+srcAddr]; ok {
+	} else if l3f, ok = i.L3Flows[l3Type+"_"+dstAddr+"_"+srcAddr]; ok {
 		l3f.TotalBytes[1] += int64(length)
 		l3f.DeltaBytes[1] += int64(length)
 	} else {
@@ -56,7 +56,7 @@ func (i *Iface) UpdateL3Flow(l3Type string, srcAddr string, dstAddr string, leng
 			TotalBytes: [2]int64{int64(length), 0},
 			DeltaBytes: [2]int64{int64(length), 0},
 		}
-		i.L3Flows[srcAddr+"_"+dstAddr] = l3f
+		i.L3Flows[l3Type+"_"+srcAddr+"_"+dstAddr] = l3f
 	}
 	i.Lock.Unlock()
 }
@@ -65,10 +65,10 @@ func (i *Iface) UpdateL4Flow(l4Protocol string, srcAddr string, dstAddr string, 
 	i.Lock.Lock()
 	var l4f *L4Flow
 	var ok bool
-	if l4f, ok = i.L4Flows[srcAddr+":"+srcPort+"_"+dstAddr+":"+dstPort]; ok {
+	if l4f, ok = i.L4Flows[l4Protocol+"_"+srcAddr+":"+srcPort+"_"+dstAddr+":"+dstPort]; ok {
 		l4f.TotalBytes[0] += int64(length)
 		l4f.DeltaBytes[0] += int64(length)
-	} else if l4f, ok = i.L4Flows[dstAddr+":"+dstPort+"_"+srcAddr+":"+srcPort]; ok {
+	} else if l4f, ok = i.L4Flows[l4Protocol+"_"+dstAddr+":"+dstPort+"_"+srcAddr+":"+srcPort]; ok {
 		l4f.TotalBytes[1] += int64(length)
 		l4f.DeltaBytes[1] += int64(length)
 	} else {
@@ -79,7 +79,7 @@ func (i *Iface) UpdateL4Flow(l4Protocol string, srcAddr string, dstAddr string, 
 			TotalBytes: [2]int64{int64(length), 0},
 			DeltaBytes: [2]int64{int64(length), 0},
 		}
-		i.L4Flows[srcAddr+":"+srcPort+"_"+dstAddr+":"+dstPort] = l4f
+		i.L4Flows[l4Protocol+"_"+srcAddr+":"+srcPort+"_"+dstAddr+":"+dstPort] = l4f
 	}
 	i.Lock.Unlock()
 }

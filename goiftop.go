@@ -24,8 +24,8 @@ var Stats = &Statistics{
 
 type FlowSnapshot struct {
 	Type               string
-	SourceAddress      string
-	DestinationAddress string
+	SourceAddress      string // Include port if it is L4 flow
+	DestinationAddress string // Include port if it is L4 flow
 	UpStreamRate       int64
 	DownStreamRate     int64
 }
@@ -42,10 +42,10 @@ var isShowVersion bool
 
 func init() {
 	flag.StringVar(&ifaceName, "i", "", "Interface name")
-	flag.IntVar(&duration, "d", 1, "Throughput statistics duration")
-	flag.StringVar(&filter, "f", "", "BPF filter")
+	flag.IntVar(&duration, "d", 2, "Throughput statistics interval")
+	flag.StringVar(&filter, "bpf", "", "BPF filter")
 	flag.BoolVar(&enableLayer4, "l4", false, "Show transport layer flows")
-	flag.IntVar(&port, "p", 4096, "Http server listening port")
+	flag.IntVar(&port, "p", 16384, "Http server listening port")
 	flag.BoolVar(&isShowVersion, "v", false, "Version")
 	flag.Parse()
 
