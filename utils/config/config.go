@@ -1,6 +1,8 @@
 package config
 
 var IfaceListString string
+var GroupListString string
+var Engine string
 var IsDecodeL4 bool
 var PrintInterval int
 var IsEnableHttpSrv bool

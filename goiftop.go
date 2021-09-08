@@ -2,22 +2,30 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"github.com/fs714/goiftop/engine"
 	"github.com/fs714/goiftop/utils/config"
+	"github.com/fs714/goiftop/utils/log"
 	"github.com/fs714/goiftop/utils/version"
+	"github.com/google/gopacket/pcap"
 	"io"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime/pprof"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
 
 func init() {
-	flag.StringVar(&config.IfaceListString, "i", "", "Interface name list seperated by comma")
+	flag.StringVar(&config.IfaceListString, "i", "", "Interface name list seperated by comma for libpcap and afpacket, like eth0, eth1")
+	flag.StringVar(&config.GroupListString, "g", "", "Nflog group id and direction list seperated by comma for nflog, like 2:in, 3:out, 4:int, 5:out")
+	flag.StringVar(&config.Engine, "engine", "libpcap", "Packet capture engine, could be libpcap, afpacket and nflog")
 	flag.BoolVar(&config.IsDecodeL4, "l4", false, "Show transport layer flows")
 	flag.IntVar(&config.PrintInterval, "p", 0, "Interval to print flows, 0 means no print")
 	flag.BoolVar(&config.IsEnableHttpSrv, "http", false, "Enable http server and ui")
@@ -26,6 +34,43 @@ func init() {
 	flag.StringVar(&config.CpuProfile, "cpu_profile", "", "CPU profile file path")
 	flag.BoolVar(&config.IsShowVersion, "v", false, "Show version")
 	flag.Parse()
+
+	err := log.SetLevel("info")
+	if err != nil {
+		fmt.Println("failed to set log level")
+		os.Exit(1)
+	}
+
+	err = log.SetFormat("text")
+	if err != nil {
+		fmt.Println("failed to set log format")
+		os.Exit(1)
+	}
+
+	log.SetOutput(os.Stdout)
+}
+
+func ArgsValidation() (err error) {
+	if config.Engine != engine.LibPcapEngineName && config.Engine != engine.AfpacketEngineName && config.Engine != engine.NflogEngineName {
+		err = errors.New("invalid engine name: " + config.Engine)
+		return
+	}
+
+	if config.Engine == engine.LibPcapEngineName || config.Engine == engine.AfpacketEngineName {
+		if config.IfaceListString == "" {
+			err = errors.New("no interface provided")
+			return
+		}
+	}
+
+	if config.Engine == engine.NflogEngineName {
+		if config.GroupListString == "" {
+			err = errors.New("no group id provided")
+			return
+		}
+	}
+
+	return
 }
 
 func main() {
@@ -35,7 +80,13 @@ func main() {
 	}
 
 	if os.Geteuid() != 0 {
-		fmt.Println("must run as root")
+		log.Errorln("must run as root")
+		os.Exit(1)
+	}
+
+	err := ArgsValidation()
+	if err != nil {
+		log.Errorf("args validation failed with err: %s", err.Error())
 		os.Exit(1)
 	}
 
@@ -48,15 +99,69 @@ func main() {
 	if config.CpuProfile != "" {
 		f, err := os.Create(config.CpuProfile)
 		if err != nil {
-			fmt.Printf("failed to create file %s with err: %s\n", config.CpuProfile, err.Error())
+			log.Errorf("failed to create file %s with err: %s", config.CpuProfile, err.Error())
 			os.Exit(1)
 		}
 
 		err = pprof.StartCPUProfile(f)
 		if err != nil {
-			fmt.Printf("failed to start cpu profile with err: %s\n", err.Error())
+			log.Errorf("failed to start cpu profile with err: %s", err.Error())
 			os.Exit(1)
 		}
+	}
+
+	var engineList []engine.PktCapEngine
+	if config.Engine == engine.LibPcapEngineName {
+		for _, iface := range strings.Split(config.IfaceListString, ",") {
+			eIn := engine.NewLibPcapEngine(strings.TrimSpace(iface), "", pcap.DirectionIn, 65535, config.IsDecodeL4)
+			eOut := engine.NewLibPcapEngine(strings.TrimSpace(iface), "", pcap.DirectionOut, 65535, config.IsDecodeL4)
+			engineList = append(engineList, eIn)
+			engineList = append(engineList, eOut)
+		}
+	} else if config.Engine == engine.AfpacketEngineName {
+		for _, iface := range strings.Split(config.IfaceListString, ",") {
+			eIn := engine.NewAfpacketEngine(strings.TrimSpace(iface), pcap.DirectionIn, config.IsDecodeL4)
+			eOut := engine.NewAfpacketEngine(strings.TrimSpace(iface), pcap.DirectionOut, config.IsDecodeL4)
+			engineList = append(engineList, eIn)
+			engineList = append(engineList, eOut)
+		}
+	} else if config.Engine == engine.NflogEngineName {
+		for _, gdString := range strings.Split(config.GroupListString, ",") {
+			gd := strings.Split(strings.TrimSpace(gdString), ":")
+
+			groupId, err := strconv.Atoi(strings.TrimSpace(gd[0]))
+			if err != nil {
+				log.Errorf("invalid group id and direction list: %s", config.GroupListString)
+				os.Exit(1)
+			}
+
+			var direction pcap.Direction
+			if strings.ToLower(strings.TrimSpace(gd[1])) == "in" {
+				direction = pcap.DirectionIn
+			} else if strings.ToLower(strings.TrimSpace(gd[1])) == "out" {
+				direction = pcap.DirectionOut
+			} else {
+				log.Errorf("invalid group id and direction list: %s", config.GroupListString)
+				os.Exit(1)
+			}
+
+			e := engine.NewNflogEngine(groupId, direction, config.IsDecodeL4)
+			engineList = append(engineList, e)
+		}
+	} else {
+		err = errors.New("invalid engine name: " + config.Engine)
+		log.Errorln(err.Error())
+		os.Exit(1)
+	}
+
+	for _, e := range engineList {
+		go func(e engine.PktCapEngine) {
+			err := e.StartEngine()
+			if err != nil {
+				log.Errorf("failed to start engine with err: %s", err.Error())
+				os.Exit(1)
+			}
+		}(e)
 	}
 
 	if config.IsEnableHttpSrv {
@@ -75,7 +180,7 @@ func main() {
 			ExitWG.Add(1)
 			defer ExitWG.Done()
 
-			fmt.Printf("start http server on %s:%s\n", config.HttpSrvAddr, config.HttpSrvPort)
+			log.Infof("start http server on %s:%s", config.HttpSrvAddr, config.HttpSrvPort)
 			_ = srv.ListenAndServe()
 		}()
 
@@ -89,9 +194,9 @@ func main() {
 				defer ccancel()
 				err := srv.Shutdown(cctx)
 				if err != nil {
-					fmt.Printf("failed to close http server with err: %s\n", err.Error())
+					log.Errorf("failed to close http server with err: %s", err.Error())
 				}
-				fmt.Println("http server exit")
+				log.Infoln("http server exit")
 			}
 		}(ctx)
 	}
@@ -105,7 +210,7 @@ func main() {
 			for {
 				select {
 				case <-ctx.Done():
-					fmt.Println("print flow exit")
+					log.Infoln("print flow exit")
 					return
 				case <-ticker.C:
 					fmt.Println("flow info")
@@ -119,6 +224,6 @@ func main() {
 	ExitWG.Wait()
 	if config.CpuProfile != "" {
 		pprof.StopCPUProfile()
-		fmt.Println("cpu profile exit")
+		log.Infoln("cpu profile exit")
 	}
 }
