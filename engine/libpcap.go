@@ -2,37 +2,44 @@ package engine
 
 import (
 	"errors"
-	"fmt"
+	"github.com/fs714/goiftop/accounting"
 	"github.com/fs714/goiftop/decoder"
 	"github.com/fs714/goiftop/utils/log"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"strings"
-	"time"
 )
 
 func NewLibPcapEngine(ifaceName, bpfFilter string, direction pcap.Direction, snaplen int32, isDecodeL4 bool) (engine *LibPcapEngine) {
 	engine = &LibPcapEngine{
-		IfaceName:  ifaceName,
-		BpfFilter:  bpfFilter,
-		Direction:  direction,
-		SnapLen:    snaplen,
-		IsDecodeL4: isDecodeL4,
+		IfaceName:            ifaceName,
+		BpfFilter:            bpfFilter,
+		Direction:            direction,
+		SnapLen:              snaplen,
+		IsDecodeL4:           isDecodeL4,
+		FlowCol:              accounting.NewFlowCollection(ifaceName),
+		FlowColResetInterval: DefaultFlowColResetInterval,
 	}
 
 	return
 }
 
 type LibPcapEngine struct {
-	IfaceName  string
-	BpfFilter  string
-	Direction  pcap.Direction
-	SnapLen    int32
-	IsDecodeL4 bool
+	IfaceName            string
+	BpfFilter            string
+	Direction            pcap.Direction
+	SnapLen              int32
+	IsDecodeL4           bool
+	FlowCol              *accounting.FlowCollection
+	FlowColResetInterval int64
 }
 
-func (e *LibPcapEngine) StartEngine() (err error) {
+func (e *LibPcapEngine) StartInform(accd *accounting.Accounting) {
+	Inform(accd, e.FlowCol, e.FlowColResetInterval)
+}
+
+func (e *LibPcapEngine) StartCapture() (err error) {
 	handle, err := pcap.OpenLive(e.IfaceName, e.SnapLen, true, pcap.BlockForever)
 	if err != nil {
 		log.Errorf("failed to open live interface %s by LibPcapEngine with err: %s", e.IfaceName, err.Error())
@@ -102,73 +109,102 @@ func (e *LibPcapEngine) StartEngine() (err error) {
 	}
 
 	decoded := make([]gopacket.LayerType, 0, 8)
-	var ipCnt, ipBytes, tcpCnt, tcpBytes, udpCnt, udpBytes, icmpCnt, icmpBytes int64
-	ticker := time.NewTicker(1 * time.Second)
+	data := make([]byte, e.SnapLen)
+	fingerprint := &accounting.FlowFingerprint{}
+	l3Bytes := new(int64)
+	l4Bytes := new(int64)
 	for {
-		select {
-		case <-ticker.C:
-			ipPps := ipCnt
-			ipRate := float64(ipBytes*8/1000) / 1000
-			tcpPps := tcpCnt
-			tcpRate := float64(tcpBytes*8/1000) / 1000
-			udpPps := udpCnt
-			udpRate := float64(udpBytes*8/1000) / 1000
-			icmpPps := icmpCnt
-			icmpRate := float64(icmpBytes*8/1000) / 1000
+		data, _, err = handle.ZeroCopyReadPacketData()
+		if err != nil {
+			log.Errorf("error getting packet: %s", err.Error())
+			continue
+		}
 
-			fmt.Printf("IpPPS: %d, IpRate: %.2f, TcpPPS: %d, TcpRate: %.2f, UdpPPS: %d, UdpRate: %.2f, IcmpPPS: %d, IcmpRate: %.2f\n",
-				ipPps, ipRate, tcpPps, tcpRate, udpPps, udpRate, icmpPps, icmpRate)
-
-			ipCnt = 0
-			ipBytes = 0
-			tcpCnt = 0
-			tcpBytes = 0
-			udpCnt = 0
-			udpBytes = 0
-			icmpCnt = 0
-			icmpBytes = 0
-		default:
-			data, _, err := handle.ZeroCopyReadPacketData()
-			if err != nil {
-				log.Errorf("error getting packet: %s", err.Error())
-				continue
-			}
-
-			err = dec.DecodeLayers(data, firstLayer, &decoded)
-			if err != nil {
-				if e.IsDecodeL4 {
-					ignoreErr := false
-					for _, s := range []string{"TLS", "STP", "Fragment"} {
-						if strings.Contains(err.Error(), s) {
-							ignoreErr = true
-						}
-					}
-					if !ignoreErr {
-						log.Errorf("error decoding packet with err: %s", err.Error())
+		err = dec.DecodeLayers(data, firstLayer, &decoded)
+		if err != nil {
+			if e.IsDecodeL4 {
+				ignoreErr := false
+				for _, s := range []string{"TLS", "STP", "Fragment"} {
+					if strings.Contains(err.Error(), s) {
+						ignoreErr = true
 					}
 				}
-			}
-
-			for _, ly := range decoded {
-				switch ly {
-				case layers.LayerTypeIPv4:
-					ipCnt++
-					ipBytes += int64(ipv4.Length)
-					break
-				case layers.LayerTypeTCP:
-					tcpCnt++
-					tcpBytes += int64(len(tcp.Contents) + len(tcp.LayerPayload()))
-					break
-				case layers.LayerTypeUDP:
-					udpCnt++
-					udpBytes += int64(udp.Length)
-					break
-				case layers.LayerTypeICMPv4:
-					icmpCnt++
-					icmpBytes += int64(len(icmpv4.Contents) + len(icmpv4.LayerPayload()))
-					break
+				if !ignoreErr {
+					log.Errorf("error decoding packet with err: %s", err.Error())
 				}
 			}
 		}
+
+		for _, ly := range decoded {
+			switch ly {
+			case layers.LayerTypeIPv4:
+				if e.Direction == pcap.DirectionOut {
+					fingerprint.SrcAddr = ipv4.DstIP.String()
+					fingerprint.DstAddr = ipv4.SrcIP.String()
+				} else {
+					fingerprint.SrcAddr = ipv4.SrcIP.String()
+					fingerprint.DstAddr = ipv4.DstIP.String()
+				}
+				*l3Bytes = int64(ipv4.Length)
+				break
+			case layers.LayerTypeTCP:
+				if e.Direction == pcap.DirectionOut {
+					fingerprint.SrcPort = uint16(tcp.DstPort)
+					fingerprint.DstPort = uint16(tcp.SrcPort)
+				} else {
+					fingerprint.SrcPort = uint16(tcp.SrcPort)
+					fingerprint.DstPort = uint16(tcp.DstPort)
+				}
+				fingerprint.Protocol = "tcp"
+				*l4Bytes = int64(len(tcp.Contents) + len(tcp.LayerPayload()))
+				break
+			case layers.LayerTypeUDP:
+				if e.Direction == pcap.DirectionOut {
+					fingerprint.SrcPort = uint16(udp.DstPort)
+					fingerprint.DstPort = uint16(udp.SrcPort)
+				} else {
+					fingerprint.SrcPort = uint16(udp.SrcPort)
+					fingerprint.DstPort = uint16(udp.DstPort)
+				}
+				fingerprint.Protocol = "udp"
+				*l4Bytes = int64(udp.Length)
+				break
+			case layers.LayerTypeICMPv4:
+				fingerprint.Protocol = "icmp"
+				*l4Bytes = int64(len(icmpv4.Contents) + len(icmpv4.LayerPayload()))
+				break
+			}
+		}
+
+		if fingerprint.SrcAddr != "" {
+			if e.Direction == pcap.DirectionOut {
+				e.FlowCol.UpdateL3Outbound(*fingerprint, *l3Bytes, 1, e.FlowColResetInterval)
+			} else {
+				e.FlowCol.UpdateL3Inbound(*fingerprint, *l3Bytes, 1, e.FlowColResetInterval)
+			}
+
+			if e.IsDecodeL4 && fingerprint.Protocol != "" {
+				if e.Direction == pcap.DirectionOut {
+					e.FlowCol.UpdateL4Outbound(*fingerprint, *l3Bytes, 1, e.FlowColResetInterval)
+				} else {
+					e.FlowCol.UpdateL4Inbound(*fingerprint, *l3Bytes, 1, e.FlowColResetInterval)
+				}
+			}
+		}
+
+		fingerprint.SrcAddr = ""
+		fingerprint.DstAddr = ""
+		fingerprint.SrcPort = 0
+		fingerprint.DstPort = 0
+		fingerprint.Protocol = ""
+		*l3Bytes = 0
+		*l4Bytes = 0
 	}
+}
+
+func (e *LibPcapEngine) StartEngine(accd *accounting.Accounting) (err error) {
+	go e.StartInform(accd)
+	err = e.StartCapture()
+
+	return
 }

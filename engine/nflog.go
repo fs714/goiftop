@@ -1,7 +1,11 @@
+// # iptables -I OUTPUT -p icmp -j NFLOG --nflog-group 100
+// # iptables -t raw -A PREROUTING -i eth1 -j NFLOG --nflog-group 2 --nflog-range 64 --nflog-threshold 10
+// # iptables -t mangle -A POSTROUTING -o eth1 -j NFLOG --nflog-group 5 --nflog-range 64 --nflog-threshold 10
+
 package engine
 
 import (
-	"fmt"
+	"github.com/fs714/goiftop/accounting"
 	"github.com/fs714/goiftop/decoder"
 	"github.com/fs714/goiftop/engine/nflog"
 	"github.com/fs714/goiftop/utils/log"
@@ -9,31 +13,35 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"strings"
-	"sync"
-	"time"
 )
 
-func NewNflogEngine(groupId int, direction pcap.Direction, isDecodeL4 bool) (engine *NflogEngine) {
+func NewNflogEngine(ifaceName string, groupId int, direction pcap.Direction, isDecodeL4 bool) (engine *NflogEngine) {
 	engine = &NflogEngine{
-		GroupId:    groupId,
-		Direction:  direction,
-		IsDecodeL4: isDecodeL4,
+		IfaceName:            ifaceName,
+		GroupId:              groupId,
+		Direction:            direction,
+		IsDecodeL4:           isDecodeL4,
+		FlowCol:              accounting.NewFlowCollection(ifaceName),
+		FlowColResetInterval: DefaultFlowColResetInterval,
 	}
 
 	return
 }
 
 type NflogEngine struct {
-	GroupId    int
-	Direction  pcap.Direction
-	IsDecodeL4 bool
+	IfaceName            string
+	GroupId              int
+	Direction            pcap.Direction
+	IsDecodeL4           bool
+	FlowCol              *accounting.FlowCollection
+	FlowColResetInterval int64
 }
 
-func (e *NflogEngine) StartEngine() (err error) {
-	// # iptables -I OUTPUT -p icmp -j NFLOG --nflog-group 100
-	// # iptables -t raw -A PREROUTING -i eth1 -j NFLOG --nflog-group 2 --nflog-range 64 --nflog-threshold 10
-	// # iptables -t mangle -A POSTROUTING -o eth1 -j NFLOG --nflog-group 5 --nflog-range 64 --nflog-threshold 10
+func (e *NflogEngine) StartInform(accd *accounting.Accounting) {
+	Inform(accd, e.FlowCol, e.FlowColResetInterval)
+}
 
+func (e *NflogEngine) StartCapture() (err error) {
 	var eth layers.Ethernet
 	var linuxSll layers.LinuxSLL
 	var dot1q layers.Dot1Q
@@ -75,12 +83,13 @@ func (e *NflogEngine) StartEngine() (err error) {
 
 	dec := decoder.NewLayerDecoder(DecodingLayerList...)
 	firstLayer := layers.LayerTypeIPv4
-	decoded := make([]gopacket.LayerType, 0, 8)
-	var ipCnt, ipBytes, tcpCnt, tcpBytes, udpCnt, udpBytes, icmpCnt, icmpBytes int64
-	var mu sync.Mutex
 
+	decoded := make([]gopacket.LayerType, 0, 8)
+	fingerprint := &accounting.FlowFingerprint{}
+	l3Bytes := new(int64)
+	l4Bytes := new(int64)
 	fn := func(data []byte) int {
-		err := dec.DecodeLayers(data, firstLayer, &decoded)
+		err = dec.DecodeLayers(data, firstLayer, &decoded)
 		if err != nil {
 			if e.IsDecodeL4 {
 				ignoreErr := false
@@ -95,29 +104,70 @@ func (e *NflogEngine) StartEngine() (err error) {
 			}
 		}
 
-		mu.Lock()
 		for _, ly := range decoded {
 			switch ly {
 			case layers.LayerTypeIPv4:
-				ipCnt++
-				ipBytes += int64(ipv4.Length)
+				if e.Direction == pcap.DirectionOut {
+					fingerprint.SrcAddr = ipv4.DstIP.String()
+					fingerprint.DstAddr = ipv4.SrcIP.String()
+				} else {
+					fingerprint.SrcAddr = ipv4.SrcIP.String()
+					fingerprint.DstAddr = ipv4.DstIP.String()
+				}
+				*l3Bytes = int64(ipv4.Length)
 				break
 			case layers.LayerTypeTCP:
-				tcpCnt++
-				tcpBytes += int64(len(tcp.Contents) + len(tcp.LayerPayload()))
+				if e.Direction == pcap.DirectionOut {
+					fingerprint.SrcPort = uint16(tcp.DstPort)
+					fingerprint.DstPort = uint16(tcp.SrcPort)
+				} else {
+					fingerprint.SrcPort = uint16(tcp.SrcPort)
+					fingerprint.DstPort = uint16(tcp.DstPort)
+				}
+				fingerprint.Protocol = "tcp"
+				*l4Bytes = int64(len(tcp.Contents) + len(tcp.LayerPayload()))
 				break
 			case layers.LayerTypeUDP:
-				udpCnt++
-				udpBytes += int64(udp.Length)
+				if e.Direction == pcap.DirectionOut {
+					fingerprint.SrcPort = uint16(udp.DstPort)
+					fingerprint.DstPort = uint16(udp.SrcPort)
+				} else {
+					fingerprint.SrcPort = uint16(udp.SrcPort)
+					fingerprint.DstPort = uint16(udp.DstPort)
+				}
+				fingerprint.Protocol = "udp"
+				*l4Bytes = int64(udp.Length)
 				break
 			case layers.LayerTypeICMPv4:
-				icmpCnt++
-				icmpBytes += int64(len(icmpv4.Contents) + len(icmpv4.LayerPayload()))
+				fingerprint.Protocol = "icmp"
+				*l4Bytes = int64(len(icmpv4.Contents) + len(icmpv4.LayerPayload()))
 				break
 			}
 		}
 
-		mu.Unlock()
+		if fingerprint.SrcAddr != "" {
+			if e.Direction == pcap.DirectionOut {
+				e.FlowCol.UpdateL3Outbound(*fingerprint, *l3Bytes, 1, e.FlowColResetInterval)
+			} else {
+				e.FlowCol.UpdateL3Inbound(*fingerprint, *l3Bytes, 1, e.FlowColResetInterval)
+			}
+
+			if e.IsDecodeL4 && fingerprint.Protocol != "" {
+				if e.Direction == pcap.DirectionOut {
+					e.FlowCol.UpdateL4Outbound(*fingerprint, *l3Bytes, 1, e.FlowColResetInterval)
+				} else {
+					e.FlowCol.UpdateL4Inbound(*fingerprint, *l3Bytes, 1, e.FlowColResetInterval)
+				}
+			}
+		}
+
+		fingerprint.SrcAddr = ""
+		fingerprint.DstAddr = ""
+		fingerprint.SrcPort = 0
+		fingerprint.DstPort = 0
+		fingerprint.Protocol = ""
+		*l3Bytes = 0
+		*l4Bytes = 0
 
 		return 0
 	}
@@ -125,34 +175,12 @@ func (e *NflogEngine) StartEngine() (err error) {
 	nfl := nflog.NewNfLog(e.GroupId, fn)
 	defer nfl.Close()
 
-	ticker := time.NewTicker(1 * time.Second)
-	for {
-		select {
-		case <-ticker.C:
-			mu.Lock()
-			ipPps := ipCnt
-			ipRate := float64(ipBytes*8/1000) / 1000
-			tcpPps := tcpCnt
-			tcpRate := float64(tcpBytes*8/1000) / 1000
-			udpPps := udpCnt
-			udpRate := float64(udpBytes*8/1000) / 1000
-			icmpPps := icmpCnt
-			icmpRate := float64(icmpBytes*8/1000) / 1000
-			mu.Unlock()
+	return
+}
 
-			fmt.Printf("IpPPS: %d, IpRate: %.2f, TcpPPS: %d, TcpRate: %.2f, UdpPPS: %d, UdpRate: %.2f, IcmpPPS: %d, IcmpRate: %.2f\n",
-				ipPps, ipRate, tcpPps, tcpRate, udpPps, udpRate, icmpPps, icmpRate)
+func (e *NflogEngine) StartEngine(accd *accounting.Accounting) (err error) {
+	go e.StartInform(accd)
+	err = e.StartCapture()
 
-			mu.Lock()
-			ipCnt = 0
-			ipBytes = 0
-			tcpCnt = 0
-			tcpBytes = 0
-			udpCnt = 0
-			udpBytes = 0
-			icmpCnt = 0
-			icmpBytes = 0
-			mu.Unlock()
-		}
-	}
+	return
 }

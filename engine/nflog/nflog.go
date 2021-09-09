@@ -3,7 +3,7 @@
 // Docs: http://www.netfilter.org/projects/libnetfilter_log/doxygen/index.html
 //
 // Debian packages needed:
-//   apt-get install iptables-dev linux-libc-dev libnetfilter-log-dev
+// apt-get install linux-libc-dev libnetfilter-queue-dev libnetfilter-log-dev
 
 package nflog
 
