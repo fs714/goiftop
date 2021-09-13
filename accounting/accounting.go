@@ -61,14 +61,18 @@ func (a *Accounting) Start(ctx context.Context) {
 			flowColHist.Mu.Lock()
 			fc, ok := flowColHist.HistCollection[flowCol.FlowTimestamp]
 			if !ok {
-				flowColHist.HistCollection[flowCol.FlowTimestamp] = flowCol
+				flowColCopy := *flowCol
+				flowColHist.HistCollection[flowCol.FlowTimestamp] = &flowColCopy
 				flowColHist.SetLastTimestamp(flowCol.FlowTimestamp)
 			} else {
+				fc.Mu.Lock()
 				fc.UpdateByFlowCol(flowCol)
+				fc.Mu.Unlock()
 				flowColHist.SetLastTimestamp(flowCol.FlowTimestamp)
 			}
 			flowColHist.Mu.Unlock()
 
+			flowCol.Reset()
 			flowCol.Mu.Unlock()
 		}
 	}

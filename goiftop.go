@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/fs714/goiftop/accounting"
 	"github.com/fs714/goiftop/engine"
+	"github.com/fs714/goiftop/notify"
 	"github.com/fs714/goiftop/utils/config"
 	"github.com/fs714/goiftop/utils/log"
 	"github.com/fs714/goiftop/utils/version"
@@ -16,8 +17,6 @@ import (
 	"os"
 	"os/signal"
 	"runtime/pprof"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -28,7 +27,7 @@ func init() {
 	flag.StringVar(&config.GroupListString, "g", "", "Nflog interface, group id and direction list seperated by comma, like eth0:2:in, eth0:3:out, eth1:4:int, eth1:5:out. This is used for nflog engine")
 	flag.StringVar(&config.Engine, "engine", "libpcap", "Packet capture engine, could be libpcap, afpacket and nflog")
 	flag.BoolVar(&config.IsDecodeL4, "l4", false, "Show transport layer flows")
-	flag.IntVar(&config.PrintInterval, "p", 0, "Interval to print flows, 0 means no print")
+	flag.Int64Var(&config.PrintInterval, "p", 0, "Interval to print flows, 0 means no print")
 	flag.BoolVar(&config.IsEnableHttpSrv, "http", false, "Enable http server and ui")
 	flag.StringVar(&config.HttpSrvAddr, "addr", "0.0.0.0", "Http server listening address")
 	flag.StringVar(&config.HttpSrvPort, "port", "31415", "Http server listening port")
@@ -112,14 +111,19 @@ func main() {
 		}
 	}
 
-	var ifaces []string
-	for _, iface := range strings.Split(config.IfaceListString, ",") {
-		ifaces = append(ifaces, strings.TrimSpace(iface))
+	if config.Engine == engine.NflogEngineName {
+		err = config.ParseNflogConfig()
+		if err != nil {
+			log.Errorln(err.Error())
+			os.Exit(1)
+		}
+	} else {
+		config.ParseIfaces()
 	}
 
 	accounting.GlobalAcct = accounting.NewAccounting()
 	accounting.GlobalAcct.SetRetention(300)
-	for _, iface := range ifaces {
+	for _, iface := range config.IfaceList {
 		accounting.GlobalAcct.AddInterface(iface)
 	}
 	go func(ctx context.Context) {
@@ -131,46 +135,22 @@ func main() {
 
 	var engineList []engine.PktCapEngine
 	if config.Engine == engine.LibPcapEngineName {
-		for _, iface := range ifaces {
+		for _, iface := range config.IfaceList {
 			eIn := engine.NewLibPcapEngine(iface, "", pcap.DirectionIn, 65535, config.IsDecodeL4)
 			eOut := engine.NewLibPcapEngine(iface, "", pcap.DirectionOut, 65535, config.IsDecodeL4)
 			engineList = append(engineList, eIn)
 			engineList = append(engineList, eOut)
 		}
 	} else if config.Engine == engine.AfpacketEngineName {
-		for _, iface := range ifaces {
+		for _, iface := range config.IfaceList {
 			eIn := engine.NewAfpacketEngine(iface, pcap.DirectionIn, config.IsDecodeL4)
 			eOut := engine.NewAfpacketEngine(iface, pcap.DirectionOut, config.IsDecodeL4)
 			engineList = append(engineList, eIn)
 			engineList = append(engineList, eOut)
 		}
 	} else if config.Engine == engine.NflogEngineName {
-		for _, gpString := range strings.Split(config.GroupListString, ",") {
-			gp := strings.Split(strings.TrimSpace(gpString), ":")
-
-			if len(gp) != 3 {
-				log.Errorf("invalid interface, group id and direction list: %s", config.GroupListString)
-				os.Exit(1)
-			}
-
-			iface := strings.TrimSpace(gp[0])
-			groupId, err := strconv.Atoi(strings.TrimSpace(gp[1]))
-			if err != nil {
-				log.Errorf("invalid interface, group id and direction list: %s", config.GroupListString)
-				os.Exit(1)
-			}
-
-			var direction pcap.Direction
-			if strings.ToLower(strings.TrimSpace(gp[2])) == "in" {
-				direction = pcap.DirectionIn
-			} else if strings.ToLower(strings.TrimSpace(gp[2])) == "out" {
-				direction = pcap.DirectionOut
-			} else {
-				log.Errorf("invalid interface, group id and direction list: %s", config.GroupListString)
-				os.Exit(1)
-			}
-
-			e := engine.NewNflogEngine(iface, groupId, direction, config.IsDecodeL4)
+		for _, nflogConf := range config.NflogConfigList {
+			e := engine.NewNflogEngine(nflogConf.IfaceName, nflogConf.GroupId, nflogConf.Direction, config.IsDecodeL4)
 			engineList = append(engineList, e)
 		}
 	} else {
@@ -227,53 +207,12 @@ func main() {
 	}
 
 	if config.PrintInterval > 0 {
+		time.Sleep(1 * time.Second)
 		go func(ctx context.Context) {
 			ExitWG.Add(1)
 			defer ExitWG.Done()
 
-			ticker := time.NewTicker(time.Duration(config.PrintInterval) * time.Second)
-			for {
-				select {
-				case <-ctx.Done():
-					log.Infoln("print flow exit")
-					return
-				case <-ticker.C:
-					for ifaceName, flowColHist := range accounting.GlobalAcct.FlowAccd {
-						start := time.Unix(flowColHist.LastTimestamp.Start, 0).String()
-						end := time.Unix(flowColHist.LastTimestamp.End, 0).String()
-						fmt.Printf("[%s %s - %s]\n", ifaceName, start, end)
-						cnt := 0
-						flowColHist.Mu.Lock()
-						flowCol, ok := flowColHist.HistCollection[flowColHist.LastTimestamp]
-						flowColHist.Mu.Unlock()
-						if !ok {
-							continue
-						}
-
-						fmt.Println("- [Network Layer]")
-						for _, f := range flowCol.L3FlowMap {
-							inRate := float64(f.InboundBytes*8/1000) / 1000
-							outRate := float64(f.OutboundBytes*8/1000) / 1000
-							fmt.Printf("%4d %16s %16s %6.2f %16d %6.2f %16d\n",
-								cnt, f.SrcAddr, f.DstAddr, inRate, f.InboundPackets, outRate, f.OutboundPackets)
-							cnt++
-						}
-
-						if config.IsDecodeL4 {
-							fmt.Println("- [Transport Layer]")
-							cnt := 0
-							for _, f := range flowCol.L4FlowMap {
-								inRate := float64(f.InboundBytes*8/1000) / 1000
-								outRate := float64(f.OutboundBytes*8/1000) / 1000
-								fmt.Printf("%4d %16s %16s %8d %8d %8s %6.2f %16d %6.2f %16d\n",
-									cnt, f.SrcAddr, f.DstAddr, f.SrcPort, f.DstPort, f.Protocol,
-									inRate, f.InboundPackets, outRate, f.OutboundPackets)
-								cnt++
-							}
-						}
-					}
-				}
-			}
+			notify.PrintNotifier(ctx, config.PrintInterval)
 		}(ctx)
 	}
 

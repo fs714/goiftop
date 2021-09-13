@@ -124,8 +124,7 @@ func NewNfLog(McastGroup int, fn CallbackFunc) *NfLog {
 	}
 
 	nflog.makeGroup(McastGroup)
-	// Start the background process
-	go nflog.Loop()
+
 	return nflog
 }
 
