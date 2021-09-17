@@ -24,10 +24,17 @@ import (
 
 func init() {
 	flag.StringVar(&config.IfaceListString, "i", "", "Interface name list seperated by comma for libpcap and afpacket, like eth0, eth1. This is used for libpcap and afpacket engine")
-	flag.StringVar(&config.GroupListString, "g", "", "Nflog interface, group id and direction list seperated by comma, like eth0:2:in, eth0:3:out, eth1:4:int, eth1:5:out. This is used for nflog engine")
+	flag.StringVar(&config.GroupListString, "nflog", "", "Nflog interface, group id and direction list seperated by comma, like eth0:2:in, eth0:3:out, eth1:4:int, eth1:5:out. This is used for nflog engine")
 	flag.StringVar(&config.Engine, "engine", "libpcap", "Packet capture engine, could be libpcap, afpacket and nflog")
 	flag.BoolVar(&config.IsDecodeL4, "l4", false, "Show transport layer flows")
-	flag.Int64Var(&config.PrintInterval, "p", 0, "Interval to print flows, 0 means no print")
+	flag.BoolVar(&config.PrintEnable, "print.enable", false, "enable print notifier")
+	flag.Int64Var(&config.PrintInterval, "print.interval", 2, "Interval to print flows")
+	flag.BoolVar(&config.WebHookEnable, "webhook.enable", false, "enable webhook notifier")
+	flag.StringVar(&config.WebHookUrl, "webhook.url", "", "webhokk url")
+	flag.Int64Var(&config.WebHookInterval, "webhook.interval", 15, "Interval for webhook to send out flows")
+	flag.IntVar(&config.WebHookPostTimeout, "webhook.post_timeout", 2, "Post timeout for webhook to send out flows")
+	flag.StringVar(&config.WebHookNodeId, "webhook.node_id", "", "Node identification for webhook")
+	flag.StringVar(&config.WebHookNodeOamAddr, "webhook.node_oam_addr", "", "node oam address for webhook")
 	flag.BoolVar(&config.IsEnableHttpSrv, "http", false, "Enable http server and ui")
 	flag.StringVar(&config.HttpSrvAddr, "addr", "0.0.0.0", "Http server listening address")
 	flag.StringVar(&config.HttpSrvPort, "port", "31415", "Http server listening port")
@@ -206,13 +213,24 @@ func main() {
 		}(ctx)
 	}
 
-	if config.PrintInterval > 0 {
+	if config.PrintEnable {
 		time.Sleep(1 * time.Second)
 		go func(ctx context.Context) {
 			ExitWG.Add(1)
 			defer ExitWG.Done()
 
 			notify.PrintNotifier(ctx, config.PrintInterval)
+		}(ctx)
+	}
+
+	if config.WebHookEnable {
+		time.Sleep(1 * time.Second)
+		go func(ctx context.Context) {
+			ExitWG.Add(1)
+			defer ExitWG.Done()
+
+			notify.WebhookNotifier(ctx, config.WebHookInterval, config.WebHookNodeId, config.WebHookNodeOamAddr,
+				config.WebHookUrl, config.WebHookPostTimeout)
 		}(ctx)
 	}
 
@@ -223,4 +241,6 @@ func main() {
 		pprof.StopCPUProfile()
 		log.Infoln("cpu profile exit")
 	}
+
+	log.Infoln("goiftop exit")
 }

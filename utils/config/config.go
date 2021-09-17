@@ -12,7 +12,14 @@ var IfaceListString string
 var GroupListString string
 var Engine string
 var IsDecodeL4 bool
+var PrintEnable bool
 var PrintInterval int64
+var WebHookEnable bool
+var WebHookUrl string
+var WebHookInterval int64
+var WebHookPostTimeout int
+var WebHookNodeId string
+var WebHookNodeOamAddr string
 var IsEnableHttpSrv bool
 var HttpSrvAddr string
 var HttpSrvPort string

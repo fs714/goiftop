@@ -190,13 +190,18 @@ Assume duration = 5, flow timestamp list is aggregated as below:
 */
 func (h *FlowCollectionHistory) AggregationByDuration(duration int64) (fc *FlowCollection, timestamp *FlowTimestamp) {
 	fc = NewFlowCollection(h.InterfaceName)
+	h.Mu.Lock()
+	lastTs := h.LastTimestamp
+	h.Mu.Unlock()
 	timestamp = &FlowTimestamp{
-		Start: h.LastTimestamp.Offset(-duration).Start + 1,
-		End:   h.LastTimestamp.End,
+		Start: lastTs.Offset(-duration).Start + 1,
+		End:   lastTs.End,
 	}
 
-	for ts := h.LastTimestamp; h.LastTimestamp.End-ts.End < duration; ts = ts.Offset(-1) {
+	for ts := lastTs; lastTs.End-ts.End < duration; ts = ts.Offset(-1) {
+		h.Mu.Lock()
 		fcSample, ok := h.HistCollection[ts]
+		h.Mu.Unlock()
 		if !ok {
 			continue
 		}
