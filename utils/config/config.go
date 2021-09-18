@@ -24,6 +24,7 @@ var IsEnableHttpSrv bool
 var HttpSrvAddr string
 var HttpSrvPort string
 var CpuProfile string
+var HeapProfile string
 var IsShowVersion bool
 
 type NfLogConfig struct {

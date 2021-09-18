@@ -39,6 +39,7 @@ func init() {
 	flag.StringVar(&config.HttpSrvAddr, "addr", "0.0.0.0", "Http server listening address")
 	flag.StringVar(&config.HttpSrvPort, "port", "31415", "Http server listening port")
 	flag.StringVar(&config.CpuProfile, "cpu_profile", "", "CPU profile file path")
+	flag.StringVar(&config.HeapProfile, "heap_profile", "", "Heap profile file path")
 	flag.BoolVar(&config.IsShowVersion, "v", false, "Show version")
 	flag.Parse()
 
@@ -110,6 +111,10 @@ func main() {
 			log.Errorf("failed to create file %s with err: %s", config.CpuProfile, err.Error())
 			os.Exit(1)
 		}
+
+		defer func() {
+			_ = f.Close()
+		}()
 
 		err = pprof.StartCPUProfile(f)
 		if err != nil {
@@ -240,6 +245,24 @@ func main() {
 	if config.CpuProfile != "" {
 		pprof.StopCPUProfile()
 		log.Infoln("cpu profile exit")
+	}
+
+	if config.HeapProfile != "" {
+		f, err := os.Create(config.HeapProfile)
+		if err != nil {
+			log.Errorf("failed to create file %s with err: %s", config.HeapProfile, err.Error())
+			os.Exit(1)
+		}
+
+		err = pprof.WriteHeapProfile(f)
+		if err != nil {
+			log.Errorf("failed to start heap profile with err: %s", err.Error())
+			os.Exit(1)
+		}
+
+		_ = f.Close()
+
+		log.Infoln("heap profile exit")
 	}
 
 	log.Infoln("goiftop exit")
