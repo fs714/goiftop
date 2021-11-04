@@ -138,8 +138,8 @@ func main() {
 	for _, iface := range config.IfaceList {
 		accounting.GlobalAcct.AddInterface(iface)
 	}
+	ExitWG.Add(1)
 	go func(ctx context.Context) {
-		ExitWG.Add(1)
 		defer ExitWG.Done()
 
 		accounting.GlobalAcct.Start(ctx)
@@ -193,16 +193,16 @@ func main() {
 			_, _ = io.WriteString(w, "ok\n")
 		})
 
+		ExitWG.Add(1)
 		go func() {
-			ExitWG.Add(1)
 			defer ExitWG.Done()
 
 			log.Infof("start http server on %s:%s", config.HttpSrvAddr, config.HttpSrvPort)
 			_ = srv.ListenAndServe()
 		}()
 
+		ExitWG.Add(1)
 		go func(ctx context.Context) {
-			ExitWG.Add(1)
 			defer ExitWG.Done()
 
 			select {
@@ -220,8 +220,8 @@ func main() {
 
 	if config.PrintEnable {
 		time.Sleep(1 * time.Second)
+		ExitWG.Add(1)
 		go func(ctx context.Context) {
-			ExitWG.Add(1)
 			defer ExitWG.Done()
 
 			notify.PrintNotifier(ctx, config.PrintInterval)
@@ -230,8 +230,8 @@ func main() {
 
 	if config.WebHookEnable {
 		time.Sleep(1 * time.Second)
+		ExitWG.Add(1)
 		go func(ctx context.Context) {
-			ExitWG.Add(1)
 			defer ExitWG.Done()
 
 			notify.WebhookNotifier(ctx, config.WebHookInterval, config.WebHookNodeId, config.WebHookNodeOamAddr,
