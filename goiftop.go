@@ -148,21 +148,21 @@ func main() {
 	var engineList []engine.PktCapEngine
 	if config.Engine == engine.LibPcapEngineName {
 		for _, iface := range config.IfaceList {
-			eIn := engine.NewLibPcapEngine(iface, "", pcap.DirectionIn, 65535, config.IsDecodeL4)
-			eOut := engine.NewLibPcapEngine(iface, "", pcap.DirectionOut, 65535, config.IsDecodeL4)
+			eIn := engine.NewLibPcapEngine(iface, "", pcap.DirectionIn, 65535, config.IsDecodeL4, accounting.GlobalAcct.Ch)
+			eOut := engine.NewLibPcapEngine(iface, "", pcap.DirectionOut, 65535, config.IsDecodeL4, accounting.GlobalAcct.Ch)
 			engineList = append(engineList, eIn)
 			engineList = append(engineList, eOut)
 		}
 	} else if config.Engine == engine.AfpacketEngineName {
 		for _, iface := range config.IfaceList {
-			eIn := engine.NewAfpacketEngine(iface, pcap.DirectionIn, config.IsDecodeL4)
-			eOut := engine.NewAfpacketEngine(iface, pcap.DirectionOut, config.IsDecodeL4)
+			eIn := engine.NewAfpacketEngine(iface, pcap.DirectionIn, config.IsDecodeL4, accounting.GlobalAcct.Ch)
+			eOut := engine.NewAfpacketEngine(iface, pcap.DirectionOut, config.IsDecodeL4, accounting.GlobalAcct.Ch)
 			engineList = append(engineList, eIn)
 			engineList = append(engineList, eOut)
 		}
 	} else if config.Engine == engine.NflogEngineName {
 		for _, nflogConf := range config.NflogConfigList {
-			e := engine.NewNflogEngine(nflogConf.IfaceName, nflogConf.GroupId, nflogConf.Direction, config.IsDecodeL4)
+			e := engine.NewNflogEngine(nflogConf.IfaceName, nflogConf.GroupId, nflogConf.Direction, config.IsDecodeL4, accounting.GlobalAcct.Ch)
 			engineList = append(engineList, e)
 		}
 	} else {

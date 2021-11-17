@@ -8,6 +8,10 @@ const DefaultL3FlowCollectionSize = 16
 const DefaultL4FlowCollectionSize = 64
 const DefaultFlowCollectionHistorySize = 300
 
+var FlowPool = sync.Pool{
+	New: func() interface{} { return new(Flow) },
+}
+
 type FlowFingerprint struct {
 	SrcAddr  string
 	DstAddr  string
@@ -65,11 +69,11 @@ func (c *FlowCollection) SetTimestamp(start int64, end int64) {
 func (c *FlowCollection) UpdateL3Inbound(flowFp FlowFingerprint, numBytes int64, numPkts int64) {
 	flow, ok := c.L3FlowMap[flowFp]
 	if !ok {
-		c.L3FlowMap[flowFp] = &Flow{
-			FlowFingerprint: flowFp,
-			InboundBytes:    numBytes,
-			InboundPackets:  numPkts,
-		}
+		f := FlowPool.Get().(*Flow)
+		f.FlowFingerprint = flowFp
+		f.InboundBytes = numBytes
+		f.InboundPackets = numPkts
+		c.L3FlowMap[flowFp] = f
 	} else {
 		flow.InboundBytes += numBytes
 		flow.InboundPackets += numPkts
@@ -79,11 +83,11 @@ func (c *FlowCollection) UpdateL3Inbound(flowFp FlowFingerprint, numBytes int64,
 func (c *FlowCollection) UpdateL3Outbound(flowFp FlowFingerprint, numBytes int64, numPkts int64) {
 	flow, ok := c.L3FlowMap[flowFp]
 	if !ok {
-		c.L3FlowMap[flowFp] = &Flow{
-			FlowFingerprint: flowFp,
-			OutboundBytes:   numBytes,
-			OutboundPackets: numPkts,
-		}
+		f := FlowPool.Get().(*Flow)
+		f.FlowFingerprint = flowFp
+		f.OutboundBytes = numBytes
+		f.OutboundPackets = numPkts
+		c.L3FlowMap[flowFp] = f
 	} else {
 		flow.OutboundBytes += numBytes
 		flow.OutboundPackets += numPkts
@@ -93,11 +97,11 @@ func (c *FlowCollection) UpdateL3Outbound(flowFp FlowFingerprint, numBytes int64
 func (c *FlowCollection) UpdateL4Inbound(flowFp FlowFingerprint, numBytes int64, numPkts int64) {
 	flow, ok := c.L4FlowMap[flowFp]
 	if !ok {
-		c.L4FlowMap[flowFp] = &Flow{
-			FlowFingerprint: flowFp,
-			InboundBytes:    numBytes,
-			InboundPackets:  numPkts,
-		}
+		f := FlowPool.Get().(*Flow)
+		f.FlowFingerprint = flowFp
+		f.InboundBytes = numBytes
+		f.InboundPackets = numPkts
+		c.L4FlowMap[flowFp] = f
 	} else {
 		flow.InboundBytes += numBytes
 		flow.InboundPackets += numPkts
@@ -107,11 +111,11 @@ func (c *FlowCollection) UpdateL4Inbound(flowFp FlowFingerprint, numBytes int64,
 func (c *FlowCollection) UpdateL4Outbound(flowFp FlowFingerprint, numBytes int64, numPkts int64) {
 	flow, ok := c.L4FlowMap[flowFp]
 	if !ok {
-		c.L4FlowMap[flowFp] = &Flow{
-			FlowFingerprint: flowFp,
-			OutboundBytes:   numBytes,
-			OutboundPackets: numPkts,
-		}
+		f := FlowPool.Get().(*Flow)
+		f.FlowFingerprint = flowFp
+		f.OutboundBytes = numBytes
+		f.OutboundPackets = numPkts
+		c.L4FlowMap[flowFp] = f
 	} else {
 		flow.OutboundBytes += numBytes
 		flow.OutboundPackets += numPkts
@@ -122,8 +126,9 @@ func (c *FlowCollection) UpdateByFlowCol(fc *FlowCollection) {
 	for _, f := range fc.L3FlowMap {
 		flow, ok := c.L3FlowMap[f.FlowFingerprint]
 		if !ok {
-			ff := *f
-			c.L3FlowMap[f.FlowFingerprint] = &ff
+			ff := FlowPool.Get().(*Flow)
+			*ff = *f
+			c.L3FlowMap[f.FlowFingerprint] = ff
 		} else {
 			flow.InboundBytes += f.InboundBytes
 			flow.InboundPackets += f.InboundPackets
@@ -137,8 +142,9 @@ func (c *FlowCollection) UpdateByFlowCol(fc *FlowCollection) {
 	for _, f := range fc.L4FlowMap {
 		flow, ok := c.L4FlowMap[f.FlowFingerprint]
 		if !ok {
-			ff := *f
-			c.L4FlowMap[f.FlowFingerprint] = &ff
+			ff := FlowPool.Get().(*Flow)
+			*ff = *f
+			c.L4FlowMap[f.FlowFingerprint] = ff
 		} else {
 			flow.InboundBytes += f.InboundBytes
 			flow.InboundPackets += f.InboundPackets
@@ -150,7 +156,39 @@ func (c *FlowCollection) UpdateByFlowCol(fc *FlowCollection) {
 	}
 }
 
+func (c *FlowCollection) Copy() (flowCol *FlowCollection) {
+	flowCol = &FlowCollection{
+		InterfaceName: c.InterfaceName,
+		FlowTimestamp: c.FlowTimestamp,
+		L3FlowMap:     make(map[FlowFingerprint]*Flow, len(c.L3FlowMap)),
+		L4FlowMap:     make(map[FlowFingerprint]*Flow, len(c.L4FlowMap)),
+		Mu:            &sync.Mutex{},
+	}
+
+	for k := range c.L3FlowMap {
+		f := FlowPool.Get().(*Flow)
+		*f = *c.L3FlowMap[k]
+		flowCol.L3FlowMap[k] = f
+	}
+
+	for k := range c.L4FlowMap {
+		f := FlowPool.Get().(*Flow)
+		*f = *c.L4FlowMap[k]
+		flowCol.L4FlowMap[k] = f
+	}
+
+	return
+}
+
 func (c *FlowCollection) Reset() {
+	for _, v := range c.L3FlowMap {
+		FlowPool.Put(v)
+	}
+
+	for _, v := range c.L4FlowMap {
+		FlowPool.Put(v)
+	}
+
 	c.L3FlowMap = make(map[FlowFingerprint]*Flow, DefaultL3FlowCollectionSize)
 	c.L4FlowMap = make(map[FlowFingerprint]*Flow, DefaultL4FlowCollectionSize)
 }
