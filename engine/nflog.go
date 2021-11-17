@@ -65,15 +65,16 @@ func (e *NflogEngine) StartCapture() (err error) {
 	firstLayer := layers.LayerTypeIPv4
 	capture.SetFirstLayer(firstLayer)
 
-	fn := func(data []byte) int {
-		capture.DecodeAndAccount(data)
-		return 0
-	}
-
-	nfl := nflog.NewNfLog(e.GroupId, fn)
+	ch := make(chan []byte, 16)
+	nfl := nflog.NewNfLog(e.GroupId, ch)
 	defer nfl.Close()
 
-	nfl.Loop()
+	go nfl.Loop()
 
-	return
+	for {
+		select {
+		case packet := <-ch:
+			capture.DecodeAndAccount(packet)
+		}
+	}
 }

@@ -77,8 +77,6 @@ const (
 	MaxQueueLogs     = C.MAX_PACKETS - 1
 )
 
-type CallbackFunc func(data []byte) int
-
 // NfLog
 type NfLog struct {
 	// Main nflog_handle
@@ -97,14 +95,14 @@ type NfLog struct {
 	quit chan struct{}
 	// Pointer to the packets
 	packets *C.packets
-	// Callback function
-	fn CallbackFunc
+
+	ch chan []byte
 }
 
 // Create a new NfLog
 //
 // McastGroup is that specified in ip[6]tables
-func NewNfLog(McastGroup int, fn CallbackFunc) *NfLog {
+func NewNfLog(McastGroup int, ch chan []byte) *NfLog {
 	h, err := C.nflog_open()
 	if h == nil || err != nil {
 		log.Fatalf("Failed to open NFLOG: %s", nflogError(err))
@@ -120,7 +118,7 @@ func NewNfLog(McastGroup int, fn CallbackFunc) *NfLog {
 		McastGroup: McastGroup,
 		quit:       make(chan struct{}),
 		packets:    (*C.packets)(C.malloc(C.sizeof_packets)),
-		fn:         fn,
+		ch:         ch,
 	}
 
 	nflog.makeGroup(McastGroup)
@@ -226,7 +224,7 @@ func (nflog *NfLog) Loop() {
 				}
 				nflog.seq = seq + 1
 
-				nflog.fn(packet)
+				nflog.ch <- packet
 			}
 			sliceHeader = nil
 			packet = nil
