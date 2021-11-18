@@ -15,43 +15,53 @@ const LibPcapEngineName = "libpcap"
 const AfpacketEngineName = "afpacket"
 const NflogEngineName = "nflog"
 const DefaultFlowColResetInterval = 1
-const DefaultPacketDataChannelSize = 64
 
 type PktCapEngine interface {
-	StartEngine(*accounting.Accounting) error
+	StartEngine() error
 	GetDirection() pcap.Direction
 	GetFlowCollection() *accounting.FlowCollection
 	GetResetInterval() int64
 	GetIsDecodeL4() bool
-	GetNotifyChannel() chan accounting.FlowCollection
+	GetNotifyChannel() chan *accounting.FlowCollection
 }
 
-func Notify(engine PktCapEngine) {
-	flowCol := engine.GetFlowCollection()
+func Nofify(engine PktCapEngine) {
 	direction := engine.GetDirection()
+	flowCol := engine.GetFlowCollection()
 	resetInterval := engine.GetResetInterval()
 	notifyChannel := engine.GetNotifyChannel()
-	now := time.Now().Unix()
-	flowCol.SetTimestamp(now-resetInterval, now)
 
-	if direction == pcap.DirectionOut {
-		for _, f := range flowCol.L3FlowMap {
-			f.OutboundDuration = resetInterval
-		}
-		for _, f := range flowCol.L4FlowMap {
-			f.OutboundDuration = resetInterval
-		}
-	} else {
-		for _, f := range flowCol.L3FlowMap {
-			f.InboundDuration = resetInterval
-		}
-		for _, f := range flowCol.L4FlowMap {
-			f.InboundDuration = resetInterval
+	ticker := time.NewTicker(time.Duration(resetInterval) * time.Second)
+	for {
+		select {
+		case <-ticker.C:
+			flowCol.Mu.Lock()
+			flowColCopy := flowCol.Copy()
+			flowCol.Reset()
+			flowCol.Mu.Unlock()
+
+			now := time.Now().Unix()
+			flowColCopy.SetTimestamp(now-resetInterval, now)
+
+			if direction == pcap.DirectionOut {
+				for _, f := range flowColCopy.L3FlowMap {
+					f.OutboundDuration = resetInterval
+				}
+				for _, f := range flowColCopy.L4FlowMap {
+					f.OutboundDuration = resetInterval
+				}
+			} else {
+				for _, f := range flowColCopy.L3FlowMap {
+					f.InboundDuration = resetInterval
+				}
+				for _, f := range flowColCopy.L4FlowMap {
+					f.InboundDuration = resetInterval
+				}
+			}
+
+			notifyChannel <- flowColCopy
 		}
 	}
-
-	notifyChannel <- *flowCol.Copy()
-	flowCol.Reset()
 }
 
 type CaptureLayers struct {
@@ -178,6 +188,7 @@ func (c *Capture) DecodeAndAccount(data []byte) {
 			}
 		}
 
+		c.FlowCol.Mu.Lock()
 		if c.L3Fingerprint.SrcAddr != "" {
 			if c.Direction == pcap.DirectionOut {
 				c.FlowCol.UpdateL3Outbound(*c.L3Fingerprint, *c.L3Bytes, 1)
@@ -185,6 +196,7 @@ func (c *Capture) DecodeAndAccount(data []byte) {
 				c.FlowCol.UpdateL3Inbound(*c.L3Fingerprint, *c.L3Bytes, 1)
 			}
 		}
+		c.FlowCol.Mu.Unlock()
 
 		c.L3Fingerprint.SrcAddr = ""
 		c.L3Fingerprint.DstAddr = ""
@@ -234,6 +246,7 @@ func (c *Capture) DecodeAndAccount(data []byte) {
 			}
 		}
 
+		c.FlowCol.Mu.Lock()
 		if c.L3Fingerprint.SrcAddr != "" {
 			if c.Direction == pcap.DirectionOut {
 				c.FlowCol.UpdateL3Outbound(*c.L3Fingerprint, *c.L3Bytes, 1)
@@ -249,6 +262,7 @@ func (c *Capture) DecodeAndAccount(data []byte) {
 				}
 			}
 		}
+		c.FlowCol.Mu.Unlock()
 
 		c.L3Fingerprint.SrcAddr = ""
 		c.L3Fingerprint.DstAddr = ""

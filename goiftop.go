@@ -173,7 +173,7 @@ func main() {
 
 	for _, e := range engineList {
 		go func(e engine.PktCapEngine) {
-			err := e.StartEngine(accounting.GlobalAcct)
+			err := e.StartEngine()
 			if err != nil {
 				log.Errorf("failed to start engine with err: %s", err.Error())
 				os.Exit(1)

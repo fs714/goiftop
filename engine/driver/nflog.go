@@ -77,6 +77,8 @@ const (
 	MaxQueueLogs     = C.MAX_PACKETS - 1
 )
 
+type CallbackFunc func(data []byte) int
+
 // NfLog
 type NfLog struct {
 	// Main nflog_handle
@@ -95,12 +97,14 @@ type NfLog struct {
 	quit chan struct{}
 	// Pointer to the packets
 	packets *C.packets
+	// Callback function
+	fn CallbackFunc
 }
 
 // Create a new NfLog
 //
 // McastGroup is that specified in ip[6]tables
-func NewNfLog(McastGroup int) *NfLog {
+func NewNfLog(McastGroup int, fn CallbackFunc) *NfLog {
 	h, err := C.nflog_open()
 	if h == nil || err != nil {
 		log.Fatalf("Failed to open NFLOG: %s", nflogError(err))
@@ -116,6 +120,7 @@ func NewNfLog(McastGroup int) *NfLog {
 		McastGroup: McastGroup,
 		quit:       make(chan struct{}),
 		packets:    (*C.packets)(C.malloc(C.sizeof_packets)),
+		fn:         fn,
 	}
 
 	nflog.makeGroup(McastGroup)
@@ -173,16 +178,13 @@ func (nflog *NfLog) makeGroup(group int) {
 }
 
 // Receive packets in a loop until quit
-func (nflog *NfLog) Loop(dataChan chan []byte, feedbackChan chan struct{}) {
+func (nflog *NfLog) Loop() {
 	buflen := C.size_t(RecvBufferSize)
 	pbuf := C.malloc(buflen)
 	if pbuf == nil {
 		log.Fatal("No memory for malloc")
 	}
 	defer C.free(pbuf)
-
-	var packet []byte
-	sliceHeader := (*reflect.SliceHeader)((unsafe.Pointer(&packet)))
 	for {
 		nr, err := C.recv(nflog.fd, pbuf, buflen, 0)
 		select {
@@ -203,6 +205,8 @@ func (nflog *NfLog) Loop(dataChan chan []byte, feedbackChan chan struct{}) {
 			if n >= C.MAX_PACKETS {
 				log.Printf("Packets buffer overflowed")
 			}
+			var packet []byte
+			sliceHeader := (*reflect.SliceHeader)((unsafe.Pointer(&packet)))
 
 			for i := 0; i < n; i++ {
 				p := &nflog.packets.pkt[i]
@@ -222,9 +226,10 @@ func (nflog *NfLog) Loop(dataChan chan []byte, feedbackChan chan struct{}) {
 				}
 				nflog.seq = seq + 1
 
-				dataChan <- packet
-				<-feedbackChan
+				nflog.fn(packet)
 			}
+			sliceHeader = nil
+			packet = nil
 		}
 	}
 }

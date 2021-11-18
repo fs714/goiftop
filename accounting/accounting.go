@@ -15,13 +15,13 @@ var GlobalAcct *Accounting
 type Accounting struct {
 	FlowAccd  map[string]*FlowCollectionHistory
 	Retention int64
-	Ch        chan FlowCollection
+	Ch        chan *FlowCollection
 }
 
 func NewAccounting() (acct *Accounting) {
 	acct = &Accounting{
 		FlowAccd: make(map[string]*FlowCollectionHistory, DefaultFlowDbSize),
-		Ch:       make(chan FlowCollection, DefaultStatChannelSize),
+		Ch:       make(chan *FlowCollection, DefaultStatChannelSize),
 	}
 
 	return
@@ -61,11 +61,11 @@ func (a *Accounting) Start(ctx context.Context) {
 			flowColHist.Mu.Lock()
 			fc, ok := flowColHist.HistCollection[flowCol.FlowTimestamp]
 			if !ok {
-				flowColHist.HistCollection[flowCol.FlowTimestamp] = &flowCol
+				flowColHist.HistCollection[flowCol.FlowTimestamp] = flowCol
 				flowColHist.SetLastTimestamp(flowCol.FlowTimestamp)
 			} else {
 				fc.Mu.Lock()
-				fc.UpdateByFlowCol(&flowCol)
+				fc.UpdateByFlowCol(flowCol)
 				fc.Mu.Unlock()
 				flowColHist.SetLastTimestamp(flowCol.FlowTimestamp)
 			}

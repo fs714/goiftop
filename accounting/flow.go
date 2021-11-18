@@ -4,8 +4,8 @@ import (
 	"sync"
 )
 
-const DefaultL3FlowCollectionSize = 16
-const DefaultL4FlowCollectionSize = 64
+const DefaultL3FlowCollectionSize = 300
+const DefaultL4FlowCollectionSize = 600
 const DefaultFlowCollectionHistorySize = 300
 
 var FlowPool = sync.Pool{
@@ -73,6 +73,10 @@ func (c *FlowCollection) UpdateL3Inbound(flowFp FlowFingerprint, numBytes int64,
 		f.FlowFingerprint = flowFp
 		f.InboundBytes = numBytes
 		f.InboundPackets = numPkts
+		f.InboundDuration = 0
+		f.OutboundBytes = 0
+		f.OutboundPackets = 0
+		f.OutboundDuration = 0
 		c.L3FlowMap[flowFp] = f
 	} else {
 		flow.InboundBytes += numBytes
@@ -85,8 +89,12 @@ func (c *FlowCollection) UpdateL3Outbound(flowFp FlowFingerprint, numBytes int64
 	if !ok {
 		f := FlowPool.Get().(*Flow)
 		f.FlowFingerprint = flowFp
+		f.InboundBytes = 0
+		f.InboundPackets = 0
+		f.InboundDuration = 0
 		f.OutboundBytes = numBytes
 		f.OutboundPackets = numPkts
+		f.OutboundDuration = 0
 		c.L3FlowMap[flowFp] = f
 	} else {
 		flow.OutboundBytes += numBytes
@@ -101,6 +109,10 @@ func (c *FlowCollection) UpdateL4Inbound(flowFp FlowFingerprint, numBytes int64,
 		f.FlowFingerprint = flowFp
 		f.InboundBytes = numBytes
 		f.InboundPackets = numPkts
+		f.InboundDuration = 0
+		f.OutboundBytes = 0
+		f.OutboundPackets = 0
+		f.OutboundDuration = 0
 		c.L4FlowMap[flowFp] = f
 	} else {
 		flow.InboundBytes += numBytes
@@ -113,8 +125,12 @@ func (c *FlowCollection) UpdateL4Outbound(flowFp FlowFingerprint, numBytes int64
 	if !ok {
 		f := FlowPool.Get().(*Flow)
 		f.FlowFingerprint = flowFp
+		f.InboundBytes = 0
+		f.InboundPackets = 0
+		f.InboundDuration = 0
 		f.OutboundBytes = numBytes
 		f.OutboundPackets = numPkts
+		f.OutboundDuration = 0
 		c.L4FlowMap[flowFp] = f
 	} else {
 		flow.OutboundBytes += numBytes

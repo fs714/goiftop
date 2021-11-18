@@ -9,10 +9,9 @@ import (
 	"github.com/fs714/goiftop/engine/driver"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
-	"time"
 )
 
-func NewNflogEngine(ifaceName string, groupId int, direction pcap.Direction, isDecodeL4 bool, ch chan accounting.FlowCollection) (engine *NflogEngine) {
+func NewNflogEngine(ifaceName string, groupId int, direction pcap.Direction, isDecodeL4 bool, ch chan *accounting.FlowCollection) (engine *NflogEngine) {
 	engine = &NflogEngine{
 		IfaceName:            ifaceName,
 		GroupId:              groupId,
@@ -31,7 +30,7 @@ type NflogEngine struct {
 	GroupId              int
 	Direction            pcap.Direction
 	IsDecodeL4           bool
-	NotifyChannel        chan accounting.FlowCollection
+	NotifyChannel        chan *accounting.FlowCollection
 	FlowCol              *accounting.FlowCollection
 	FlowColResetInterval int64
 }
@@ -52,30 +51,31 @@ func (e *NflogEngine) GetIsDecodeL4() bool {
 	return e.IsDecodeL4
 }
 
-func (e *NflogEngine) GetNotifyChannel() chan accounting.FlowCollection {
+func (e *NflogEngine) GetNotifyChannel() chan *accounting.FlowCollection {
 	return e.NotifyChannel
 }
 
-func (e *NflogEngine) StartEngine(accd *accounting.Accounting) (err error) {
-	nfl := driver.NewNfLog(e.GroupId)
-	defer nfl.Close()
+func (e *NflogEngine) StartEngine() (err error) {
+	go Nofify(e)
+	err = e.StartCapture()
 
-	dataCh := make(chan []byte, DefaultPacketDataChannelSize)
-	feedbackCh := make(chan struct{})
-	go nfl.Loop(dataCh, feedbackCh)
+	return
+}
 
+func (e *NflogEngine) StartCapture() (err error) {
 	capture := NewCapture(e)
 	firstLayer := layers.LayerTypeIPv4
 	capture.SetFirstLayer(firstLayer)
 
-	ticker := time.NewTicker(time.Duration(e.FlowColResetInterval) * time.Second)
-	for {
-		select {
-		case <-ticker.C:
-			Notify(e)
-		case packet := <-dataCh:
-			capture.DecodeAndAccount(packet)
-			feedbackCh <- struct{}{}
-		}
+	fn := func(data []byte) int {
+		capture.DecodeAndAccount(data)
+		return 0
 	}
+
+	nfl := driver.NewNfLog(e.GroupId, fn)
+	defer nfl.Close()
+
+	nfl.Loop()
+
+	return
 }
