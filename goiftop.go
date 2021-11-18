@@ -6,17 +6,16 @@ import (
 	"flag"
 	"fmt"
 	"github.com/fs714/goiftop/accounting"
+	"github.com/fs714/goiftop/api"
 	"github.com/fs714/goiftop/engine"
 	"github.com/fs714/goiftop/notify"
 	"github.com/fs714/goiftop/utils/config"
 	"github.com/fs714/goiftop/utils/log"
 	"github.com/fs714/goiftop/utils/version"
 	"github.com/google/gopacket/pcap"
-	"io"
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime/pprof"
 	"sync"
 	"syscall"
 	"time"
@@ -38,8 +37,7 @@ func init() {
 	flag.BoolVar(&config.IsEnableHttpSrv, "http", false, "Enable http server and ui")
 	flag.StringVar(&config.HttpSrvAddr, "addr", "0.0.0.0", "Http server listening address")
 	flag.StringVar(&config.HttpSrvPort, "port", "31415", "Http server listening port")
-	flag.StringVar(&config.CpuProfile, "cpu_profile", "", "CPU profile file path")
-	flag.StringVar(&config.HeapProfile, "heap_profile", "", "Heap profile file path")
+	flag.BoolVar(&config.IsProfiling, "profiling", false, "Enable profiling by http")
 	flag.BoolVar(&config.IsShowVersion, "v", false, "Show version")
 	flag.Parse()
 
@@ -105,24 +103,6 @@ func main() {
 
 	ExitWG := &sync.WaitGroup{}
 
-	if config.CpuProfile != "" {
-		f, err := os.Create(config.CpuProfile)
-		if err != nil {
-			log.Errorf("failed to create file %s with err: %s", config.CpuProfile, err.Error())
-			os.Exit(1)
-		}
-
-		defer func() {
-			_ = f.Close()
-		}()
-
-		err = pprof.StartCPUProfile(f)
-		if err != nil {
-			log.Errorf("failed to start cpu profile with err: %s", err.Error())
-			os.Exit(1)
-		}
-	}
-
 	if config.Engine == engine.NflogEngineName {
 		err = config.ParseNflogConfig()
 		if err != nil {
@@ -173,7 +153,7 @@ func main() {
 
 	for _, e := range engineList {
 		go func(e engine.PktCapEngine) {
-			err := e.StartEngine()
+			err = e.StartEngine()
 			if err != nil {
 				log.Errorf("failed to start engine with err: %s", err.Error())
 				os.Exit(1)
@@ -181,17 +161,15 @@ func main() {
 		}(e)
 	}
 
-	if config.IsEnableHttpSrv {
+	if config.IsEnableHttpSrv || config.IsProfiling {
+		router := api.InitRouter()
 		srv := &http.Server{
 			Addr:           config.HttpSrvAddr + ":" + config.HttpSrvPort,
+			Handler:        router,
 			ReadTimeout:    300 * time.Second,
 			WriteTimeout:   300 * time.Second,
 			MaxHeaderBytes: 1 << 20,
 		}
-
-		http.HandleFunc("/api/v1/health", func(w http.ResponseWriter, r *http.Request) {
-			_, _ = io.WriteString(w, "ok\n")
-		})
 
 		ExitWG.Add(1)
 		go func() {
@@ -242,28 +220,6 @@ func main() {
 	<-signalCh
 	cancel()
 	ExitWG.Wait()
-	if config.CpuProfile != "" {
-		pprof.StopCPUProfile()
-		log.Infoln("cpu profile exit")
-	}
-
-	if config.HeapProfile != "" {
-		f, err := os.Create(config.HeapProfile)
-		if err != nil {
-			log.Errorf("failed to create file %s with err: %s", config.HeapProfile, err.Error())
-			os.Exit(1)
-		}
-
-		err = pprof.WriteHeapProfile(f)
-		if err != nil {
-			log.Errorf("failed to start heap profile with err: %s", err.Error())
-			os.Exit(1)
-		}
-
-		_ = f.Close()
-
-		log.Infoln("heap profile exit")
-	}
 
 	log.Infoln("goiftop exit")
 }

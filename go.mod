@@ -3,6 +3,10 @@ module github.com/fs714/goiftop
 go 1.15
 
 require (
+	github.com/gin-contrib/cors v1.3.1
+	github.com/gin-contrib/gzip v0.0.3
+	github.com/gin-contrib/pprof v1.3.0
+	github.com/gin-gonic/gin v1.7.4
 	github.com/google/gopacket v1.1.19
 	github.com/mattn/go-colorable v0.1.8 // indirect
 	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d // indirect

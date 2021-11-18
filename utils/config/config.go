@@ -23,8 +23,7 @@ var WebHookNodeOamAddr string
 var IsEnableHttpSrv bool
 var HttpSrvAddr string
 var HttpSrvPort string
-var CpuProfile string
-var HeapProfile string
+var IsProfiling bool
 var IsShowVersion bool
 
 type NfLogConfig struct {
